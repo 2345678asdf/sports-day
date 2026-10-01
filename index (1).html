@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Sports Day Scoreboard</title>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--tx:#14181f;--mut:#667085;--bd:#dfe3e8;--warn:#b42318;--warnbg:#fee4e2;--edit:#fff4cc;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#10131a;--card:#1a1f29;--tx:#eef1f6;--mut:#9aa4b2;--bd:#2b3240;--warn:#fda29b;--warnbg:#4a1d1a;--edit:#4a3d0a}}
+:root[data-theme="dark"]{--bg:#10131a;--card:#1a1f29;--tx:#eef1f6;--mut:#9aa4b2;--bd:#2b3240;--warn:#fda29b;--warnbg:#4a1d1a;--edit:#4a3d0a}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font:16px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+header{display:flex;justify-content:space-between;align-items:center;padding:12px 16px}
+h1{font-size:20px;margin:0}
+button,select,input{font:inherit;color:var(--tx);background:var(--card);border:1px solid var(--bd);border-radius:8px;padding:8px 10px}
+button{cursor:pointer}
+nav{display:flex;gap:6px;padding:0 16px 8px;overflow-x:auto}
+nav button.on{background:var(--tx);color:var(--bg)}
+main{padding:8px 16px 32px;max-width:900px;margin:auto}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:12px;margin-bottom:12px}
+.house{display:flex;align-items:center;gap:10px;margin:8px 0}
+.house b{width:70px}
+.bar{height:34px;border-radius:8px;display:flex;align-items:center;justify-content:flex-end;padding:0 10px;font-weight:700;min-width:44px;transition:width .4s}
+.wrap{overflow-x:auto}
+table{border-collapse:collapse;width:100%}
+th,td{padding:6px 8px;border-bottom:1px solid var(--bd);text-align:left;white-space:nowrap}
+.chip{display:inline-block;padding:2px 10px;border-radius:99px;font-weight:600}
+.sel{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}
+.bad{background:var(--warnbg);color:var(--warn);border-radius:8px;padding:6px 10px;margin:6px 0}
+.ed{background:var(--edit)}
+.mut{color:var(--mut)}
+body.proj #vb,body.proj #lb,body.proj nav{display:none}
+body.proj #pb{display:inline-block}
+body.proj h1{font-size:34px}
+body.proj .house b{width:130px;font-size:34px}
+body.proj .bar{height:80px;font-size:44px}
+body.proj .bk{display:none}
+</style></head>
+<body>
+<header><h1>Sports Day Scoreboard</h1><div><button id="lb">Teacher login</button> <button id="vb" hidden></button> <button id="pb">Projector</button></div></header>
+<nav id="nav"></nav>
+<main id="main"><p class="mut">Loading…</p></main>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script>
+// ====== PASTE YOUR SUPABASE DETAILS HERE (see SETUP.md) ======
+const SUPABASE_URL='https://miklgywffmoyzudcbdij.supabase.co';
+const SUPABASE_KEY='sb_publishable_UunXHTYAExPdu282S38Qhw_DQCD4--O';
+// =============================================================
+const HOUSES={Hawks:{c:'#1e64d6',t:'#fff'},Bears:{c:'#f2c200',t:'#14181f'},Cobras:{c:'#d63030',t:'#fff'},Sharks:{c:'#1f9d55',t:'#fff'}};
+const CATS=['Junior','Intermediate','Senior'], GENDERS=['Boys','Girls'];
+const EVENTS=['e100','e200','e400','e800','relay'];
+const evLabel=(c,e)=>e==='relay'?(c==='Senior'?'4x100m relay':'Shuttle relay'):e.slice(1)+'m';
+const nPlaces=e=>e==='relay'?4:8;   // relay: 4 house teams
+const maxPerHouse=e=>e==='relay'?1:2;
+const points=(p)=>9-p;              // 1st=8 ... 8th=1 (relay: 8,7,6,5)
+const rid=(c,g,e)=>c+'_'+g+'_'+e;
+const esc=s=>String(s??'').replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
+
+let sb=null, ready=false, canWrite=false, adminMode=true, myEmail='', pendingEmail='', entries={}, logs=[], tab='board';
+let sel={c:'Senior',g:'Boys',e:'e100'}, queue=Promise.resolve(), pending=false;
+
+const chip=h=>h?`<span class="chip" style="background:${HOUSES[h].c};color:${HOUSES[h].t}">${h}</span>`:'<span class="mut">—</span>';
+const get=(r,p)=>entries[r+'__'+p]||{h:'',n:'',z:false};
+const isAdmin=()=>canWrite&&adminMode;
+// how many entries a house already has in a race, ignoring one place
+const used=(r,p,h)=>{let n=0;for(let i=1;i<=nPlaces(r.split('_')[2]);i++)if(i!==p&&get(r,i).h===h)n++;return n};
+const pts=(r,p)=>{const x=get(r,p);return x.h&&!x.z?points(p):0};
+
+function totals(filter){
+  const t={};Object.keys(HOUSES).forEach(h=>t[h]=0);
+  for(const x of Object.values(entries)) if(x.h&&!x.z&&(!filter||filter(x))) t[x.h]+=points(x.p);
+  return t;
+}
+function issues(){
+  const out=[],edited=[];
+  for(const c of CATS)for(const g of GENDERS)for(const e of EVENTS){
+    const r=rid(c,g,e),lab=`${c} ${g} ${evLabel(c,e)}`,n=nPlaces(e),cnt={},seen={};let gap=false,last=0;
+    for(let p=1;p<=n;p++){const x=get(r,p);
+      if(x.h){last=p;cnt[x.h]=(cnt[x.h]||0)+1}
+      if(x.n&&!x.z){ if(seen[x.n.toLowerCase()]) out.push(`${lab}: runner "${x.n}" is entered twice`); seen[x.n.toLowerCase()]=1}
+      if(x.ed) edited.push(`${lab}, place ${p}`)}
+    for(let p=1;p<last;p++) if(!get(r,p).h) gap=true;
+    if(gap) out.push(`${lab}: a place is empty above a filled one`);
+    for(const h in cnt) if(cnt[h]>maxPerHouse(e)) out.push(`${lab}: ${h} has ${cnt[h]} entries (max ${maxPerHouse(e)})`);
+  }
+  return {out,edited};
+}
+
+function viewBoard(){
+  const t=totals(),order=Object.keys(t).sort((a,b)=>t[b]-t[a]),top=Math.max(1,...Object.values(t));
+  let done=0;for(const c of CATS)for(const g of GENDERS)for(const e of EVENTS){const r=rid(c,g,e);let f=0;for(let p=1;p<=nPlaces(e);p++)if(get(r,p).h)f++;if(f===nPlaces(e))done++}
+  let h=`<div class="card">${order.map(k=>`<div class="house"><b>${k}</b><div class="bar" style="width:${Math.max(12,t[k]/top*80)}%;background:${HOUSES[k].c};color:${HOUSES[k].t}">${t[k]}</div></div>`).join('')}<div class="mut">${done} of 30 races complete</div></div>`;
+  h+=`<div class="card bk"><b>Points by group</b><div class="wrap"><table><tr><th></th>${CATS.flatMap(c=>GENDERS.map(g=>`<th>${c[0]}${c==='Intermediate'?'nt':c.slice(1,3)} ${g[0]}</th>`)).join('')}</tr>`;
+  for(const k of order) h+=`<tr><td>${chip(k)}</td>${CATS.flatMap(c=>GENDERS.map(g=>`<td>${totals(x=>x.h===k&&x.race.startsWith(c+'_'+g+'_'))[k]}</td>`)).join('')}</tr>`;
+  return h+'</table></div></div>';
+}
+
+function selectors(){
+  const o=(arr,v,f=x=>x)=>arr.map(x=>`<option value="${x}" ${x===v?'selected':''}>${f(x)}</option>`).join('');
+  return `<div class="sel"><select data-s="c">${o(CATS,sel.c)}</select><select data-s="g">${o(GENDERS,sel.g)}</select><select data-s="e">${o(EVENTS,sel.e,x=>evLabel(sel.c,x))}</select></div>`;
+}
+function viewRace(){
+  const r=rid(sel.c,sel.g,sel.e),n=nPlaces(sel.e);
+  let h=selectors()+`<div class="card wrap"><table><tr><th>Place</th><th>House</th><th>Runner</th><th>Pts</th>${isAdmin()?'<th>No-show</th>':''}</tr>`;
+  for(let p=1;p<=n;p++){const x=get(r,p);
+    if(isAdmin()){
+      h+=`<tr class="${x.ed?'ed':''}"><td>${p}</td><td><select data-f="h" data-p="${p}"><option value="">—</option>${Object.keys(HOUSES).map(k=>`<option ${k===x.h?'selected':''} ${k!==x.h&&used(r,p,k)>=maxPerHouse(sel.e)?'disabled':''}>${k}${k!==x.h&&used(r,p,k)>=maxPerHouse(sel.e)?' (full)':''}</option>`).join('')}</select></td>
+      <td><input data-f="n" data-p="${p}" value="${esc(x.n)}" placeholder="Name TBC" size="14"></td><td>${pts(r,p)}</td>
+      <td><input type="checkbox" data-f="z" data-p="${p}" ${x.z?'checked':''}></td></tr>`;
+    } else h+=`<tr><td>${p}</td><td>${chip(x.h)}</td><td>${x.h?(x.n?esc(x.n):'<span class="mut">Name TBC</span>'):''}</td><td>${x.z?'No-show':pts(r,p)}</td></tr>`;
+  }
+  return h+'</table></div>'+(isAdmin()?'<p class="mut">Each house can have '+maxPerHouse(sel.e)+(maxPerHouse(sel.e)>1?' entries':' entry')+' in this race. Yellow rows were edited after first entry. Every change is recorded in the Log.</p>':'');
+}
+function viewChecks(){
+  const {out,edited}=issues();
+  return `<div class="card"><b>Problems found</b>${out.length?out.map(s=>`<div class="bad">${esc(s)}</div>`).join(''):'<p class="mut">None. All entries look consistent.</p>'}</div>
+  <div class="card"><b>Results edited after first entry (${edited.length})</b>${edited.map(s=>`<div class="ed" style="padding:4px 8px;margin:4px 0;border-radius:6px">${esc(s)}</div>`).join('')||'<p class="mut">None.</p>'}</div>`;
+}
+function viewLog(){
+  return `<div class="card wrap"><table><tr><th>Time</th><th>Who</th><th>Change</th></tr>${logs.map(l=>`<tr><td>${new Date(l.t).toLocaleTimeString()}</td><td>${esc(l.who||'?')}</td><td style="white-space:normal">${esc(l.msg)}</td></tr>`).join('')||'<tr><td colspan="3" class="mut">No changes yet.</td></tr>'}</table></div>`;
+}
+
+function viewLogin(){
+  return `<div class="card"><b>Teacher login</b><p class="mut">Enter your school email. We will email you a sign-in link. Open it on this same phone or computer.</p>
+  <input id="em" type="email" placeholder="name@school.edu" value="${esc(pendingEmail)}"> <button id="sendc">Send link</button>
+  ${pendingEmail?`<p>Link sent to ${esc(pendingEmail)}. Open your email and tap it.</p>`:''}</div>`;
+}
+
+function render(){
+  const a=document.activeElement;
+  if(a&&a.closest&&a.closest('#main')&&/INPUT|SELECT/.test(a.tagName)&&tab==='race'&&isAdmin()){pending=true;return}
+  pending=false;
+  if(!isAdmin()&&(tab==='checks'||tab==='log'))tab='board';
+  const vb=document.getElementById('vb');vb.hidden=!canWrite;vb.textContent=adminMode?'View as student':'Back to admin view';
+  document.getElementById('lb').textContent=myEmail?'Log out':'Teacher login';
+  const tabs=[['board','Leaderboard'],['race','Races']].concat(isAdmin()?[['checks','Checks'],['log','Log']]:[]);
+  document.getElementById('nav').innerHTML=tabs.map(([k,l])=>`<button data-t="${k}" class="${k===tab?'on':''}">${l}</button>`).join('');
+  document.getElementById('main').innerHTML=!ready?'<div class="card">Setup needed: add the Supabase URL and key at the top of index.html (see SETUP.md).</div>':{board:viewBoard,race:viewRace,checks:viewChecks,log:viewLog,login:viewLogin}[tab]();
+}
+
+function save(race,p,field,val){
+  queue=queue.then(()=>doSave(race,p,field,val)).catch(e=>alert('Not saved: '+e.message));
+}
+async function doSave(race,p,field,val){
+  const old=get(race,p),[c,g,e]=race.split('_'),had=old.h||old.n||old.z;
+  if(field==='h'&&val&&used(race,p,val)>=maxPerHouse(e)){
+    if(document.activeElement)document.activeElement.blur();
+    alert(val+' already has '+maxPerHouse(e)+' entr'+(maxPerHouse(e)>1?'ies':'y')+' in this race.');render();return}
+  const nw={race,p,h:old.h||'',n:old.n||'',z:!!old.z,[field]:val,ed:!!(old.ed||had)};
+  const {error}=await sb.from('entries').upsert(nw);   // the database also enforces the house limit
+  if(error){alert('Not saved: '+error.message);await loadEntries();return}
+  entries[race+'__'+p]=nw;render();
+  const f={h:'house',n:'runner',z:'no-show'}[field],show=v=>v===true?'yes':v===false||v===''?'blank':v;
+  await sb.from('changelog').insert({who:myEmail,msg:`${c} ${g} ${evLabel(c,e)}, place ${p}: ${f} ${show(old[field])} → ${show(val)}`});
+}
+
+async function loadEntries(){
+  const {data}=await sb.from('entries').select('*');
+  if(!data)return;
+  entries={};data.forEach(x=>{entries[x.race+'__'+x.p]=x});render();
+}
+async function loadLog(){
+  const {data}=await sb.from('changelog').select('*').order('t',{ascending:false}).limit(100);
+  if(data){logs=data;render()}
+}
+let logWatch=false;
+async function checkAdmin(){
+  const {data:{session}}=await sb.auth.getSession();
+  myEmail=session&&session.user?session.user.email:'';canWrite=false;
+  if(myEmail){
+    const {data}=await sb.from('admins').select('email').eq('email',myEmail.toLowerCase()).maybeSingle();
+    canWrite=!!data;
+    if(!canWrite)alert('You are logged in, but '+myEmail+' is not on the admin list.');
+  }
+  if(canWrite&&!logWatch){
+    logWatch=true;loadLog();
+    sb.channel('log').on('postgres_changes',{event:'*',schema:'public',table:'changelog'},loadLog).subscribe();
+  }
+  render();
+}
+
+document.addEventListener('change',ev=>{
+  const t=ev.target;
+  if(t.dataset.s){sel[t.dataset.s]=t.value;render()}
+  else if(t.dataset.f){save(rid(sel.c,sel.g,sel.e),+t.dataset.p,t.dataset.f,t.type==='checkbox'?t.checked:t.value.trim())}
+});
+document.addEventListener('focusout',()=>setTimeout(()=>{if(pending)render()},150));
+document.getElementById('nav').addEventListener('click',ev=>{if(ev.target.dataset.t){tab=ev.target.dataset.t;render()}});
+document.getElementById('vb').addEventListener('click',()=>{adminMode=!adminMode;render()});
+document.getElementById('pb').addEventListener('click',()=>{document.body.classList.toggle('proj');tab='board';render()});
+
+document.getElementById('lb').addEventListener('click',async()=>{
+  if(myEmail){await sb.auth.signOut();myEmail='';canWrite=false;adminMode=true;tab='board';render()}
+  else{tab='login';render()}
+});
+document.addEventListener('click',async ev=>{
+  if(ev.target.id==='sendc'){
+    const em=document.getElementById('em').value.trim().toLowerCase();if(!em)return;
+    const {error}=await sb.auth.signInWithOtp({email:em,options:{emailRedirectTo:location.origin+location.pathname}});
+    if(error)alert(error.message);else{pendingEmail=em;render()}
+  }
+});
+
+(async()=>{
+  if(SUPABASE_URL.startsWith('PASTE')){render();return}
+  sb=supabase.createClient(SUPABASE_URL,SUPABASE_KEY);ready=true;
+  sb.auth.onAuthStateChange(ev=>{if(ev==='SIGNED_IN'&&!myEmail)setTimeout(checkAdmin,0)});
+  await checkAdmin();await loadEntries();
+  sb.channel('entries').on('postgres_changes',{event:'*',schema:'public',table:'entries'},loadEntries).subscribe();
+  setInterval(loadEntries,20000);   // safety net if live updates drop
+})();
+</script></body></html>
