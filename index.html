@@ -35,7 +35,7 @@ body.proj .bar{height:80px;font-size:44px}
 body.proj .bk{display:none}
 </style></head>
 <body>
-<header><h1>Sports Day Scoreboard</h1><div><button id="lb">Teacher login</button> <button id="vb" hidden></button> <button id="pb">Projector</button></div></header>
+<header><h1>Sports Day Scoreboard</h1><div><button id="lb">Admin login</button> <button id="vb" hidden></button> <button id="pb">Projector</button></div></header>
 <nav id="nav"></nav>
 <main id="main"><p class="mut">Loading…</p></main>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
@@ -45,21 +45,24 @@ const SUPABASE_URL='https://miklgywffmoyzudcbdij.supabase.co';
 const SUPABASE_KEY='sb_publishable_UunXHTYAExPdu282S38Qhw_DQCD4--O';
 // =============================================================
 const HOUSES={Hawks:{c:'#1e64d6',t:'#fff'},Bears:{c:'#f2c200',t:'#14181f'},Cobras:{c:'#d63030',t:'#fff'},Sharks:{c:'#1f9d55',t:'#fff'}};
-const CATS=['Junior','Intermediate','Senior'], GENDERS=['Boys','Girls'];
+const CATS=['Junior','Intermediate','Senior','Teachers'];
+const gendersFor=c=>c==='Teachers'?['Male','Female']:['Boys','Girls'];
 const EVENTS=['e100','e200','e400','e800','relay'];
-const evLabel=(c,e)=>e==='relay'?(c==='Senior'?'4x100m relay':'Shuttle relay'):e.slice(1)+'m';
+const eventsFor=c=>c==='Teachers'?['e100']:EVENTS;
+const evLabel=(c,e)=>e==='relay'?(c==='Junior'?'Shuttle relay':'4x100m relay'):e.slice(1)+'m';
 const nPlaces=e=>e==='relay'?4:8;   // relay: 4 house teams
 const maxPerHouse=e=>e==='relay'?1:2;
-const points=(p)=>9-p;              // 1st=8 ... 8th=1 (relay: 8,7,6,5)
+const points=p=>[0,9,7,6,5,4,3,2,1][p];   // 1st=9, 2nd=7, then 6,5,4,3,2,1 (relay: 9,7,6,5)
 const rid=(c,g,e)=>c+'_'+g+'_'+e;
 const esc=s=>String(s??'').replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
 
-let sb=null, ready=false, canWrite=false, adminMode=true, myEmail='', pendingEmail='', entries={}, logs=[], tab='board';
+let sb=null, ready=false, canWrite=false, adminMode=true, myEmail='', pendingEmail='', entries={}, roster=[], logs=[], tab='board';
 let sel={c:'Senior',g:'Boys',e:'e100'}, queue=Promise.resolve(), pending=false;
 
 const chip=h=>h?`<span class="chip" style="background:${HOUSES[h].c};color:${HOUSES[h].t}">${h}</span>`:'<span class="mut">—</span>';
 const get=(r,p)=>entries[r+'__'+p]||{h:'',n:'',z:false};
 const isAdmin=()=>canWrite&&adminMode;
+const dls=()=>Object.keys(HOUSES).map(h=>`<datalist id="dl-${h}">${roster.filter(q=>q.house===h&&q.grp===sel.c+' '+sel.g).map(q=>`<option value="${esc(q.name)}">`).join('')}</datalist>`).join('');
 // how many entries a house already has in a race, ignoring one place
 const used=(r,p,h)=>{let n=0;for(let i=1;i<=nPlaces(r.split('_')[2]);i++)if(i!==p&&get(r,i).h===h)n++;return n};
 const pts=(r,p)=>{const x=get(r,p);return x.h&&!x.z?points(p):0};
@@ -71,10 +74,12 @@ function totals(filter){
 }
 function issues(){
   const out=[],edited=[];
-  for(const c of CATS)for(const g of GENDERS)for(const e of EVENTS){
+  for(const c of CATS)for(const g of gendersFor(c))for(const e of eventsFor(c)){
     const r=rid(c,g,e),lab=`${c} ${g} ${evLabel(c,e)}`,n=nPlaces(e),cnt={},seen={};let gap=false,last=0;
     for(let p=1;p<=n;p++){const x=get(r,p);
       if(x.h){last=p;cnt[x.h]=(cnt[x.h]||0)+1}
+      const ro=roster.filter(q=>q.house===x.h&&q.grp===c+' '+g);
+      if(x.n&&x.h&&ro.length&&!ro.some(q=>q.name.toLowerCase()===x.n.toLowerCase())) out.push(`${lab}: "${x.n}" is not on the ${x.h} ${c} ${g} list`);
       if(x.n&&!x.z){ if(seen[x.n.toLowerCase()]) out.push(`${lab}: runner "${x.n}" is entered twice`); seen[x.n.toLowerCase()]=1}
       if(x.ed) edited.push(`${lab}, place ${p}`)}
     for(let p=1;p<last;p++) if(!get(r,p).h) gap=true;
@@ -86,16 +91,16 @@ function issues(){
 
 function viewBoard(){
   const t=totals(),order=Object.keys(t).sort((a,b)=>t[b]-t[a]),top=Math.max(1,...Object.values(t));
-  let done=0;for(const c of CATS)for(const g of GENDERS)for(const e of EVENTS){const r=rid(c,g,e);let f=0;for(let p=1;p<=nPlaces(e);p++)if(get(r,p).h)f++;if(f===nPlaces(e))done++}
-  let h=`<div class="card">${order.map(k=>`<div class="house"><b>${k}</b><div class="bar" style="width:${Math.max(12,t[k]/top*80)}%;background:${HOUSES[k].c};color:${HOUSES[k].t}">${t[k]}</div></div>`).join('')}<div class="mut">${done} of 30 races complete</div></div>`;
-  h+=`<div class="card bk"><b>Points by group</b><div class="wrap"><table><tr><th></th>${CATS.flatMap(c=>GENDERS.map(g=>`<th>${c[0]}${c==='Intermediate'?'nt':c.slice(1,3)} ${g[0]}</th>`)).join('')}</tr>`;
-  for(const k of order) h+=`<tr><td>${chip(k)}</td>${CATS.flatMap(c=>GENDERS.map(g=>`<td>${totals(x=>x.h===k&&x.race.startsWith(c+'_'+g+'_'))[k]}</td>`)).join('')}</tr>`;
+  let done=0,total=0;for(const c of CATS)for(const g of gendersFor(c))for(const e of eventsFor(c)){total++;const r=rid(c,g,e);let f=0;for(let p=1;p<=nPlaces(e);p++)if(get(r,p).h)f++;if(f===nPlaces(e))done++}
+  let h=`<div class="card">${order.map(k=>`<div class="house"><b>${k}</b><div class="bar" style="width:${Math.max(12,t[k]/top*80)}%;background:${HOUSES[k].c};color:${HOUSES[k].t}">${t[k]}</div></div>`).join('')}<div class="mut">${done} of ${total} races complete</div></div>`;
+  h+=`<div class="card bk"><b>Points by group</b><div class="wrap"><table><tr><th></th>${CATS.flatMap(c=>gendersFor(c).map(g=>`<th>${c[0]}${c==='Intermediate'?'nt':c.slice(1,3)} ${g[0]}</th>`)).join('')}</tr>`;
+  for(const k of order) h+=`<tr><td>${chip(k)}</td>${CATS.flatMap(c=>gendersFor(c).map(g=>`<td>${totals(x=>x.h===k&&x.race.startsWith(c+'_'+g+'_'))[k]}</td>`)).join('')}</tr>`;
   return h+'</table></div></div>';
 }
 
-function selectors(){
+function selectors(ev){
   const o=(arr,v,f=x=>x)=>arr.map(x=>`<option value="${x}" ${x===v?'selected':''}>${f(x)}</option>`).join('');
-  return `<div class="sel"><select data-s="c">${o(CATS,sel.c)}</select><select data-s="g">${o(GENDERS,sel.g)}</select><select data-s="e">${o(EVENTS,sel.e,x=>evLabel(sel.c,x))}</select></div>`;
+  return `<div class="sel"><select data-s="c">${o(CATS,sel.c)}</select><select data-s="g">${o(gendersFor(sel.c),sel.g)}</select>${ev===false?'':`<select data-s="e">${o(eventsFor(sel.c),sel.e,x=>evLabel(sel.c,x))}</select>`}</div>`;
 }
 function viewRace(){
   const r=rid(sel.c,sel.g,sel.e),n=nPlaces(sel.e);
@@ -103,11 +108,11 @@ function viewRace(){
   for(let p=1;p<=n;p++){const x=get(r,p);
     if(isAdmin()){
       h+=`<tr class="${x.ed?'ed':''}"><td>${p}</td><td><select data-f="h" data-p="${p}"><option value="">—</option>${Object.keys(HOUSES).map(k=>`<option ${k===x.h?'selected':''} ${k!==x.h&&used(r,p,k)>=maxPerHouse(sel.e)?'disabled':''}>${k}${k!==x.h&&used(r,p,k)>=maxPerHouse(sel.e)?' (full)':''}</option>`).join('')}</select></td>
-      <td><input data-f="n" data-p="${p}" value="${esc(x.n)}" placeholder="Name TBC" size="14"></td><td>${pts(r,p)}</td>
+      <td><input data-f="n" data-p="${p}" value="${esc(x.n)}" placeholder="Name TBC" size="14" ${x.h?`list="dl-${x.h}"`:''}></td><td>${pts(r,p)}</td>
       <td><input type="checkbox" data-f="z" data-p="${p}" ${x.z?'checked':''}></td></tr>`;
     } else h+=`<tr><td>${p}</td><td>${chip(x.h)}</td><td>${x.h?(x.n?esc(x.n):'<span class="mut">Name TBC</span>'):''}</td><td>${x.z?'No-show':pts(r,p)}</td></tr>`;
   }
-  return h+'</table></div>'+(isAdmin()?'<p class="mut">Each house can have '+maxPerHouse(sel.e)+(maxPerHouse(sel.e)>1?' entries':' entry')+' in this race. Yellow rows were edited after first entry. Every change is recorded in the Log.</p>':'');
+  return h+'</table></div>'+(isAdmin()?dls()+'<p class="mut">Each house can have '+maxPerHouse(sel.e)+(maxPerHouse(sel.e)>1?' entries':' entry')+' in this race. Yellow rows were edited after first entry. Every change is recorded in the Log.</p>':'');
 }
 function viewChecks(){
   const {out,edited}=issues();
@@ -118,22 +123,28 @@ function viewLog(){
   return `<div class="card wrap"><table><tr><th>Time</th><th>Who</th><th>Change</th></tr>${logs.map(l=>`<tr><td>${new Date(l.t).toLocaleTimeString()}</td><td>${esc(l.who||'?')}</td><td style="white-space:normal">${esc(l.msg)}</td></tr>`).join('')||'<tr><td colspan="3" class="mut">No changes yet.</td></tr>'}</table></div>`;
 }
 
+function viewNames(){
+  const grp=sel.c+' '+sel.g;
+  return selectors(false)+Object.keys(HOUSES).map(h=>{
+    const rs=roster.filter(q=>q.house===h&&q.grp===grp);
+    return `<div class="card">${chip(h)} <span class="mut">${grp}</span><div style="margin:8px 0">${rs.map(q=>`<span class="chip ed">${esc(q.name)} <a href="#" data-del="${q.id}">✕</a></span>`).join(' ')||'<span class="mut">No names yet</span>'}</div>
+    <input data-add="${h}" placeholder="e.g. Ashwin and James" size="22"> <button data-addbtn="${h}">Add</button></div>`}).join('');
+}
 function viewLogin(){
-  return `<div class="card"><b>Teacher login</b><p class="mut">Enter your school email. We will email you a sign-in link. Open it on this same phone or computer.</p>
-  <input id="em" type="email" placeholder="name@school.edu" value="${esc(pendingEmail)}"> <button id="sendc">Send link</button>
-  ${pendingEmail?`<p>Link sent to ${esc(pendingEmail)}. Open your email and tap it.</p>`:''}</div>`;
+  return `<div class="card"><b>Admin login</b><p class="mut">Enter the username and password you were given.</p>
+  <input id="un" placeholder="Username" autocapitalize="none" autocomplete="username"> <input id="pw" type="password" placeholder="Password" autocomplete="current-password"> <button id="dologin">Log in</button></div>`;
 }
 
 function render(){
   const a=document.activeElement;
-  if(a&&a.closest&&a.closest('#main')&&/INPUT|SELECT/.test(a.tagName)&&tab==='race'&&isAdmin()){pending=true;return}
+  if(a&&a.closest&&a.closest('#main')&&/INPUT|SELECT/.test(a.tagName)&&(tab==='login'||((tab==='race'||tab==='names')&&isAdmin()))){pending=true;return}
   pending=false;
-  if(!isAdmin()&&(tab==='checks'||tab==='log'))tab='board';
+  if(!isAdmin()&&(tab==='checks'||tab==='log'||tab==='names'))tab='board';
   const vb=document.getElementById('vb');vb.hidden=!canWrite;vb.textContent=adminMode?'View as student':'Back to admin view';
-  document.getElementById('lb').textContent=myEmail?'Log out':'Teacher login';
-  const tabs=[['board','Leaderboard'],['race','Races']].concat(isAdmin()?[['checks','Checks'],['log','Log']]:[]);
+  document.getElementById('lb').textContent=myEmail?'Log out':'Admin login';
+  const tabs=[['board','Leaderboard'],['race','Races']].concat(isAdmin()?[['names','Names'],['checks','Checks'],['log','Log']]:[]);
   document.getElementById('nav').innerHTML=tabs.map(([k,l])=>`<button data-t="${k}" class="${k===tab?'on':''}">${l}</button>`).join('');
-  document.getElementById('main').innerHTML=!ready?'<div class="card">Setup needed: add the Supabase URL and key at the top of index.html (see SETUP.md).</div>':{board:viewBoard,race:viewRace,checks:viewChecks,log:viewLog,login:viewLogin}[tab]();
+  document.getElementById('main').innerHTML=!ready?'<div class="card">Setup needed: add the Supabase URL and key at the top of index.html (see SETUP.md).</div>':{board:viewBoard,race:viewRace,checks:viewChecks,log:viewLog,names:viewNames,login:viewLogin}[tab]();
 }
 
 function save(race,p,field,val){
@@ -157,6 +168,10 @@ async function loadEntries(){
   if(!data)return;
   entries={};data.forEach(x=>{entries[x.race+'__'+x.p]=x});render();
 }
+async function loadRoster(){
+  const {data}=await sb.from('roster').select('*').order('name');
+  if(data){roster=data;render()}
+}
 async function loadLog(){
   const {data}=await sb.from('changelog').select('*').order('t',{ascending:false}).limit(100);
   if(data){logs=data;render()}
@@ -164,12 +179,7 @@ async function loadLog(){
 let logWatch=false;
 async function checkAdmin(){
   const {data:{session}}=await sb.auth.getSession();
-  myEmail=session&&session.user?session.user.email:'';canWrite=false;
-  if(myEmail){
-    const {data}=await sb.from('admins').select('email').eq('email',myEmail.toLowerCase()).maybeSingle();
-    canWrite=!!data;
-    if(!canWrite)alert('You are logged in, but '+myEmail+' is not on the admin list.');
-  }
+  myEmail=session&&session.user?session.user.email.split('@')[0]:'';canWrite=!!myEmail;
   if(canWrite&&!logWatch){
     logWatch=true;loadLog();
     sb.channel('log').on('postgres_changes',{event:'*',schema:'public',table:'changelog'},loadLog).subscribe();
@@ -179,7 +189,7 @@ async function checkAdmin(){
 
 document.addEventListener('change',ev=>{
   const t=ev.target;
-  if(t.dataset.s){sel[t.dataset.s]=t.value;render()}
+  if(t.dataset.s){sel[t.dataset.s]=t.value;if(!gendersFor(sel.c).includes(sel.g))sel.g=gendersFor(sel.c)[0];if(!eventsFor(sel.c).includes(sel.e))sel.e=eventsFor(sel.c)[0];render()}
   else if(t.dataset.f){save(rid(sel.c,sel.g,sel.e),+t.dataset.p,t.dataset.f,t.type==='checkbox'?t.checked:t.value.trim())}
 });
 document.addEventListener('focusout',()=>setTimeout(()=>{if(pending)render()},150));
@@ -192,18 +202,28 @@ document.getElementById('lb').addEventListener('click',async()=>{
   else{tab='login';render()}
 });
 document.addEventListener('click',async ev=>{
-  if(ev.target.id==='sendc'){
-    const em=document.getElementById('em').value.trim().toLowerCase();if(!em)return;
-    const {error}=await sb.auth.signInWithOtp({email:em,options:{emailRedirectTo:location.origin+location.pathname}});
-    if(error)alert(error.message);else{pendingEmail=em;render()}
+  const d=ev.target.dataset;
+  if(ev.target.id==='dologin'){
+    const u=document.getElementById('un').value.trim().toLowerCase(),pw=document.getElementById('pw').value;
+    if(!u||!pw)return;
+    const {error}=await sb.auth.signInWithPassword({email:u+'@sportsday.app',password:pw});
+    if(error)alert('Login failed: '+error.message);else{tab='board';await checkAdmin()}
   }
+  if(d.addbtn){
+    const inp=document.querySelector(`input[data-add="${d.addbtn}"]`);
+    const names=inp.value.split(/,|&|\band\b|\n/i).map(x=>x.trim()).filter(Boolean);
+    if(!names.length)return;
+    const {error}=await sb.from('roster').insert(names.map(name=>({house:d.addbtn,grp:sel.c+' '+sel.g,name})));
+    if(error)alert('Not saved: '+error.message);else{inp.value='';loadRoster()}
+  }
+  if(d.del){ev.preventDefault();await sb.from('roster').delete().eq('id',d.del);loadRoster()}
 });
 
 (async()=>{
   if(SUPABASE_URL.startsWith('PASTE')){render();return}
   sb=supabase.createClient(SUPABASE_URL,SUPABASE_KEY);ready=true;
-  sb.auth.onAuthStateChange(ev=>{if(ev==='SIGNED_IN'&&!myEmail)setTimeout(checkAdmin,0)});
-  await checkAdmin();await loadEntries();
+  await checkAdmin();await loadEntries();await loadRoster();
+  sb.channel('roster').on('postgres_changes',{event:'*',schema:'public',table:'roster'},loadRoster).subscribe();
   sb.channel('entries').on('postgres_changes',{event:'*',schema:'public',table:'entries'},loadEntries).subscribe();
   setInterval(loadEntries,20000);   // safety net if live updates drop
 })();
