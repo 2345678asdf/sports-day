@@ -206,7 +206,7 @@ document.addEventListener('click',async ev=>{
   if(ev.target.id==='dologin'){
     const u=document.getElementById('un').value.trim().toLowerCase(),pw=document.getElementById('pw').value;
     if(!u||!pw)return;
-    const {error}=await sb.auth.signInWithPassword({email:u+'@sportsday.app',password:pw});
+    const {error}=await sb.auth.signInWithPassword({email:(u.includes('@')?u:u+'@sportsday.app'),password:pw});
     if(error)alert('Login failed: '+error.message);else{tab='board';await checkAdmin()}
   }
   if(d.addbtn){
